@@ -752,14 +752,15 @@ update_node() {
     print_info "Updating Node..."
     cd "$NODE_DIR"
     
-    print_info "Step 1/3: Stopping container..."
-    docker compose down
+    print_info "Step 1/3: Pulling new node image..."
+    docker compose pull node
     
-    print_info "Step 2/3: Pulling new image..."
-    docker compose pull
+    print_info "Step 2/3: Stopping and removing old container..."
+    docker compose stop node
+    docker compose rm -f node
     
-    print_info "Step 3/3: Starting container..."
-    docker compose up -d
+    print_info "Step 3/3: Starting node with new image..."
+    docker compose up -d node
     
     # Cleanup old images
     print_info "Cleaning up old images..."
@@ -1140,23 +1141,25 @@ stop_services() {
 
 # Update services
 update_services() {
-    print_info "Updating 3X-UI..."
+    print_info "Updating 3X-UI Panel..."
     cd "$INSTALL_DIR"
     
-    print_info "Step 1/3: Stopping containers..."
-    docker compose down
+    print_info "Step 1/3: Pulling new panel image..."
+    docker compose pull 3xui
     
-    print_info "Step 2/3: Pulling new images..."
-    docker compose pull
+    print_info "Step 2/3: Stopping and removing old container..."
+    docker compose stop 3xui
+    docker compose rm -f 3xui
     
-    print_info "Step 3/3: Starting containers..."
-    docker compose up -d
+    print_info "Step 3/3: Starting panel with new image..."
+    docker compose up -d 3xui
     
     # Cleanup old images
     print_info "Cleaning up old images..."
     docker image prune -f
     
-    print_success "3X-UI updated successfully!"
+    print_success "3X-UI Panel updated successfully!"
+    echo -e "${YELLOW}Note: Database was not restarted.${NC}"
 }
 
 # Show service status
