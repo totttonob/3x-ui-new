@@ -22,7 +22,9 @@ NC='\033[0m' # No Color
 DEFAULT_PANEL_PORT=2053
 DEFAULT_SUB_PORT=2096
 DEFAULT_DB_PASSWORD="change_this_password"
-INSTALL_DIR="/opt/3x-ui-new"
+# Get the directory where the script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="$SCRIPT_DIR"
 COMPOSE_FILE="docker-compose.yml"
 
 # Print banner
@@ -509,7 +511,7 @@ services:
     container_name: 3xui_app
     network_mode: host
     volumes:
-      - \$PWD/cert/:/cert/
+      - \$PWD/cert/:/app/cert/
     environment:
       # Xray settings
       XRAY_VMESS_AEAD_FORCED: "false"
@@ -575,7 +577,7 @@ services:
       # - "443:443"
       # - "8443:8443"
     volumes:
-      - \$PWD/cert/:/cert/
+      - \$PWD/cert/:/app/cert/
     environment:
       # Xray settings
       XRAY_VMESS_AEAD_FORCED: "false"
