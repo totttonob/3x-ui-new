@@ -330,10 +330,32 @@ gen_random_string() {
     echo "$random_string"
 }
 
-# Generate random password
+# Generate random password (safe for YAML and SQL - no special chars that need escaping)
 generate_password() {
     local length=${1:-24}
-    tr -dc 'A-Za-z0-9!@#$%^&*()_+' < /dev/urandom | head -c "$length"
+    # Use only alphanumeric characters to avoid YAML/SQL escaping issues
+    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$length"
+}
+
+# Escape string for SQL (single quotes)
+escape_sql() {
+    local str="$1"
+    # Escape single quotes by doubling them
+    echo "${str//\'/\'\'}"
+}
+
+# Escape string for YAML values
+escape_yaml() {
+    local str="$1"
+    # If string contains special chars, quote it
+    if [[ "$str" =~ [:\#\'\"\[\]\{\}\|>\<\!\&\*\?\@\`] ]]; then
+        # Escape double quotes and wrap in double quotes
+        str="${str//\\/\\\\}"
+        str="${str//\"/\\\"}"
+        echo "\"$str\""
+    else
+        echo "$str"
+    fi
 }
 
 # Get server IPv4
@@ -678,6 +700,44 @@ setup_ip_certificate() {
 prompt_and_setup_ssl() {
     local cert_dir="$1"
     local server_ip="$2"
+    
+    # First check for existing certificates
+    echo ""
+    print_info "Checking for existing certificates..."
+    
+    # Check if we already have valid certificates in cert_dir
+    if [[ -f "${cert_dir}/fullchain.pem" && -f "${cert_dir}/privkey.pem" ]]; then
+        if check_existing_certificates "$server_ip" "$cert_dir" 2>/dev/null; then
+            echo ""
+            echo -e "${GREEN}Valid certificate already exists in ${cert_dir}${NC}"
+            read -p "Use existing certificate? [Y/n]: " use_existing
+            if [[ "$use_existing" != "n" && "$use_existing" != "N" ]]; then
+                SSL_HOST="${server_ip}"
+                CERT_TYPE="letsencrypt-ip"
+                print_success "Using existing certificate"
+                # Update SSL settings in database if panel is running
+                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Check acme.sh for existing certificates for this IP
+    if [[ -d "/root/.acme.sh/${server_ip}_ecc" ]] || [[ -d "/root/.acme.sh/${server_ip}" ]]; then
+        if check_existing_certificates "$server_ip" "$cert_dir"; then
+            echo ""
+            echo -e "${GREEN}Found existing Let's Encrypt certificate for ${server_ip}${NC}"
+            read -p "Use existing certificate? [Y/n]: " use_existing
+            if [[ "$use_existing" != "n" && "$use_existing" != "N" ]]; then
+                SSL_HOST="${server_ip}"
+                CERT_TYPE="letsencrypt-ip"
+                print_success "Using existing certificate"
+                # Update SSL settings in database if panel is running
+                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+                return 0
+            fi
+        fi
+    fi
 
     echo ""
     echo -e "${CYAN}Choose SSL certificate setup method:${NC}"
@@ -712,11 +772,28 @@ prompt_and_setup_ssl() {
             break
         done
         
+        # Check for existing domain certificate
+        if check_existing_certificates "$domain" "$cert_dir"; then
+            echo ""
+            echo -e "${GREEN}Found existing certificate for ${domain}${NC}"
+            read -p "Use existing certificate? [Y/n]: " use_existing
+            if [[ "$use_existing" != "n" && "$use_existing" != "N" ]]; then
+                SSL_HOST="${domain}"
+                CERT_TYPE="letsencrypt-domain"
+                print_success "Using existing certificate for ${domain}"
+                # Update SSL settings in database
+                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+                return 0
+            fi
+        fi
+        
         setup_ssl_certificate "$domain" "$cert_dir"
         if [ $? -eq 0 ]; then
             SSL_HOST="${domain}"
             CERT_TYPE="letsencrypt-domain"
             print_success "SSL certificate configured successfully with domain: ${domain}"
+            # Update SSL settings in database
+            update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
         else
             print_warning "SSL setup failed. You can configure it later from the menu."
             SSL_HOST="${server_ip}"
@@ -746,6 +823,8 @@ prompt_and_setup_ssl() {
             SSL_HOST="${server_ip}"
             CERT_TYPE="letsencrypt-ip"
             print_success "Let's Encrypt IP certificate configured successfully"
+            # Update SSL settings in database
+            update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
         else
             print_warning "IP certificate setup failed. You can configure it later from the menu."
             SSL_HOST="${server_ip}"
@@ -1345,11 +1424,26 @@ NODECONFIG
     SSL_HOST="$server_ip"
     CERT_TYPE="none"
     
-    # Interactive SSL setup (reuse existing function but with NODE_DIR)
-    local original_install_dir="$INSTALL_DIR"
-    INSTALL_DIR="$NODE_DIR"
-    prompt_and_setup_ssl "$NODE_DIR/cert" "$server_ip"
-    INSTALL_DIR="$original_install_dir"
+    # Check for existing panel certificates (if node is on same server as panel)
+    if check_panel_certificates "$NODE_DIR/cert"; then
+        # Certificates copied from panel
+        CERT_TYPE="letsencrypt-ip"
+        SSL_HOST="$server_ip"
+        # Try to get cert type from panel config
+        if [[ -f "$INSTALL_DIR/.3xui-config" ]]; then
+            source "$INSTALL_DIR/.3xui-config" 2>/dev/null
+            if [[ -n "$CERT_TYPE" ]]; then
+                # Keep panel's cert type
+                :
+            fi
+        fi
+    else
+        # Interactive SSL setup (reuse existing function but with NODE_DIR)
+        local original_install_dir="$INSTALL_DIR"
+        INSTALL_DIR="$NODE_DIR"
+        prompt_and_setup_ssl "$NODE_DIR/cert" "$server_ip"
+        INSTALL_DIR="$original_install_dir"
+    fi
     
     local cert_type="$CERT_TYPE"
     local domain_or_ip="$SSL_HOST"
@@ -1841,6 +1935,140 @@ get_webpath_from_db() {
         echo ""
         return 1
     fi
+}
+
+# Update SSL settings in database
+update_ssl_settings_in_db() {
+    local cert_file="$1"
+    local key_file="$2"
+    local db_user="xui_user"
+    local db_name="xui_db"
+    
+    # Check if postgres container is running
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3xui_postgres$"; then
+        print_warning "PostgreSQL container is not running. SSL settings will be applied after panel restart."
+        return 1
+    fi
+    
+    # Escape values for SQL
+    local cert_file_escaped=$(escape_sql "$cert_file")
+    local key_file_escaped=$(escape_sql "$key_file")
+    
+    print_info "Updating SSL settings in database..."
+    
+    # Update webCertFile
+    docker exec 3xui_postgres psql -h 127.0.0.1 -p 5432 -U "$db_user" -d "$db_name" -c \
+        "UPDATE settings SET value = '$cert_file_escaped' WHERE key = 'webCertFile';" 2>/dev/null
+    
+    # Update webKeyFile
+    docker exec 3xui_postgres psql -h 127.0.0.1 -p 5432 -U "$db_user" -d "$db_name" -c \
+        "UPDATE settings SET value = '$key_file_escaped' WHERE key = 'webKeyFile';" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        print_success "SSL settings updated in database!"
+        return 0
+    else
+        print_warning "Failed to update SSL settings in database"
+        return 1
+    fi
+}
+
+# Check for existing Let's Encrypt certificates
+check_existing_certificates() {
+    local domain_or_ip="$1"
+    local cert_dir="$2"
+    
+    # Standard acme.sh certificate locations
+    local acme_cert_path=""
+    local found_cert=false
+    
+    # Check in acme.sh folder for domain certificate
+    if [[ -d "/root/.acme.sh/${domain_or_ip}_ecc" ]]; then
+        acme_cert_path="/root/.acme.sh/${domain_or_ip}_ecc"
+        if [[ -f "${acme_cert_path}/fullchain.cer" && -f "${acme_cert_path}/${domain_or_ip}.key" ]]; then
+            found_cert=true
+            print_info "Found existing ECC certificate for ${domain_or_ip}"
+        fi
+    elif [[ -d "/root/.acme.sh/${domain_or_ip}" ]]; then
+        acme_cert_path="/root/.acme.sh/${domain_or_ip}"
+        if [[ -f "${acme_cert_path}/fullchain.cer" && -f "${acme_cert_path}/${domain_or_ip}.key" ]]; then
+            found_cert=true
+            print_info "Found existing RSA certificate for ${domain_or_ip}"
+        fi
+    fi
+    
+    # Check in our local cert folder
+    if [[ -f "${cert_dir}/fullchain.pem" && -f "${cert_dir}/privkey.pem" ]]; then
+        # Verify certificate is valid (not expired)
+        if command -v openssl &>/dev/null; then
+            local expiry=$(openssl x509 -in "${cert_dir}/fullchain.pem" -noout -enddate 2>/dev/null | cut -d= -f2)
+            if [[ -n "$expiry" ]]; then
+                local expiry_epoch=$(date -d "$expiry" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$expiry" +%s 2>/dev/null)
+                local now_epoch=$(date +%s)
+                if [[ -n "$expiry_epoch" && "$expiry_epoch" -gt "$now_epoch" ]]; then
+                    found_cert=true
+                    print_info "Found valid certificate in ${cert_dir} (expires: $expiry)"
+                else
+                    print_warning "Certificate in ${cert_dir} has expired"
+                    found_cert=false
+                fi
+            fi
+        else
+            # Can't verify, assume it's valid
+            found_cert=true
+            print_info "Found existing certificate in ${cert_dir}"
+        fi
+    fi
+    
+    # If found in acme.sh but not in local cert dir, copy it
+    if [[ "$found_cert" == "true" && -n "$acme_cert_path" && ! -f "${cert_dir}/fullchain.pem" ]]; then
+        print_info "Copying certificate from acme.sh to ${cert_dir}..."
+        mkdir -p "$cert_dir"
+        if [[ -f "${acme_cert_path}/fullchain.cer" ]]; then
+            cp "${acme_cert_path}/fullchain.cer" "${cert_dir}/fullchain.pem"
+        fi
+        if [[ -f "${acme_cert_path}/${domain_or_ip}.key" ]]; then
+            cp "${acme_cert_path}/${domain_or_ip}.key" "${cert_dir}/privkey.pem"
+        fi
+        chmod 600 "${cert_dir}/privkey.pem" 2>/dev/null
+        chmod 644 "${cert_dir}/fullchain.pem" 2>/dev/null
+    fi
+    
+    if [[ "$found_cert" == "true" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check for certificates from panel installation (for node on same server)
+check_panel_certificates() {
+    local node_cert_dir="$1"
+    local panel_cert_dir="$INSTALL_DIR/cert"
+    
+    # Check if panel certificates exist
+    if [[ -f "${panel_cert_dir}/fullchain.pem" && -f "${panel_cert_dir}/privkey.pem" ]]; then
+        print_info "Found existing panel certificates in ${panel_cert_dir}"
+        
+        echo ""
+        echo -e "${CYAN}Panel certificates detected!${NC}"
+        echo -e "Certificate path: ${GREEN}${panel_cert_dir}${NC}"
+        echo ""
+        read -p "Use panel certificates for node? [Y/n]: " use_panel_certs
+        
+        if [[ "$use_panel_certs" != "n" && "$use_panel_certs" != "N" ]]; then
+            print_info "Copying panel certificates to node..."
+            mkdir -p "$node_cert_dir"
+            cp "${panel_cert_dir}/fullchain.pem" "${node_cert_dir}/"
+            cp "${panel_cert_dir}/privkey.pem" "${node_cert_dir}/"
+            chmod 600 "${node_cert_dir}/privkey.pem" 2>/dev/null
+            chmod 644 "${node_cert_dir}/fullchain.pem" 2>/dev/null
+            print_success "Certificates copied to node!"
+            return 0
+        fi
+    fi
+    
+    return 1
 }
 
 # Get panel status for menu display
