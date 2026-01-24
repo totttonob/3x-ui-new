@@ -716,8 +716,8 @@ prompt_and_setup_ssl() {
                 SSL_HOST="${server_ip}"
                 CERT_TYPE="letsencrypt-ip"
                 print_success "Using existing certificate"
-                # Update SSL settings in database if panel is running
-                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+                # Update SSL settings in database if panel is running (ignore errors)
+                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem" || true
                 return 0
             fi
         fi
@@ -733,8 +733,8 @@ prompt_and_setup_ssl() {
                 SSL_HOST="${server_ip}"
                 CERT_TYPE="letsencrypt-ip"
                 print_success "Using existing certificate"
-                # Update SSL settings in database if panel is running
-                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+                # Update SSL settings in database if panel is running (ignore errors)
+                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem" || true
                 return 0
             fi
         fi
@@ -782,8 +782,8 @@ prompt_and_setup_ssl() {
                 SSL_HOST="${domain}"
                 CERT_TYPE="letsencrypt-domain"
                 print_success "Using existing certificate for ${domain}"
-                # Update SSL settings in database
-                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+                # Update SSL settings in database (ignore errors if DB not running)
+                update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem" || true
                 return 0
             fi
         fi
@@ -793,8 +793,8 @@ prompt_and_setup_ssl() {
             SSL_HOST="${domain}"
             CERT_TYPE="letsencrypt-domain"
             print_success "SSL certificate configured successfully with domain: ${domain}"
-            # Update SSL settings in database
-            update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+            # Update SSL settings in database (ignore errors if DB not running)
+            update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem" || true
         else
             print_warning "SSL setup failed. You can configure it later from the menu."
             SSL_HOST="${server_ip}"
@@ -824,8 +824,8 @@ prompt_and_setup_ssl() {
             SSL_HOST="${server_ip}"
             CERT_TYPE="letsencrypt-ip"
             print_success "Let's Encrypt IP certificate configured successfully"
-            # Update SSL settings in database
-            update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem"
+            # Update SSL settings in database (ignore errors if DB not running)
+            update_ssl_settings_in_db "/app/cert/fullchain.pem" "/app/cert/privkey.pem" || true
         else
             print_warning "IP certificate setup failed. You can configure it later from the menu."
             SSL_HOST="${server_ip}"
@@ -1947,8 +1947,30 @@ update_ssl_settings_in_db() {
     
     # Check if postgres container is running
     if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^3xui_postgres$"; then
-        print_warning "PostgreSQL container is not running. SSL settings will be applied after panel restart."
-        return 1
+        # SSL settings will be passed via environment variables in docker-compose
+        print_info "SSL settings will be applied via environment variables on panel start."
+        return 0
+    fi
+    
+    # Check if settings table exists and has data (panel needs to run first to create schema)
+    local table_exists=$(docker exec 3xui_postgres psql -h 127.0.0.1 -p 5432 -U "$db_user" -d "$db_name" -t -c \
+        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'settings');" 2>/dev/null | tr -d ' \r\n')
+    
+    if [[ "$table_exists" != "t" ]]; then
+        # Settings table doesn't exist yet - panel hasn't started
+        # SSL settings will be applied via environment variables
+        print_info "SSL settings will be applied via environment variables on first panel start."
+        return 0
+    fi
+    
+    # Check if there are any settings records
+    local settings_count=$(docker exec 3xui_postgres psql -h 127.0.0.1 -p 5432 -U "$db_user" -d "$db_name" -t -c \
+        "SELECT COUNT(*) FROM settings WHERE key IN ('webCertFile', 'webKeyFile');" 2>/dev/null | tr -d ' \r\n')
+    
+    if [[ "$settings_count" == "0" ]] || [[ -z "$settings_count" ]]; then
+        # No settings yet - panel needs to start first to create default settings
+        print_info "SSL settings will be applied via environment variables on first panel start."
+        return 0
     fi
     
     # Escape values for SQL
@@ -1969,8 +1991,8 @@ update_ssl_settings_in_db() {
         print_success "SSL settings updated in database!"
         return 0
     else
-        print_warning "Failed to update SSL settings in database"
-        return 1
+        print_warning "Failed to update SSL settings in database. SSL will be applied via environment variables."
+        return 0
     fi
 }
 
@@ -2710,13 +2732,13 @@ install_wizard() {
     
     # Step 1: Install Docker
     echo ""
-    echo -e "${PURPLE}[Step 1/6]${NC} Docker Installation"
+    echo -e "${PURPLE}[Step 1/7]${NC} Docker Installation"
     install_docker
     install_docker_compose
     
     # Step 2: Network mode
     echo ""
-    echo -e "${PURPLE}[Step 2/6]${NC} Network Configuration"
+    echo -e "${PURPLE}[Step 2/7]${NC} Network Configuration"
     echo -e "${CYAN}Choose network mode:${NC}"
     echo "1) Host network (recommended for advanced users)"
     echo "   - Direct access to all ports"
@@ -2738,7 +2760,7 @@ install_wizard() {
     
     # Step 3: Port configuration
     echo ""
-    echo -e "${PURPLE}[Step 3/6]${NC} Port Configuration"
+    echo -e "${PURPLE}[Step 3/7]${NC} Port Configuration"
     read -p "Panel port [$DEFAULT_PANEL_PORT]: " panel_port
     panel_port=${panel_port:-$DEFAULT_PANEL_PORT}
     
@@ -2757,7 +2779,7 @@ install_wizard() {
     
     # Step 4: Database password
     echo ""
-    echo -e "${PURPLE}[Step 4/6]${NC} Database Configuration"
+    echo -e "${PURPLE}[Step 4/7]${NC} Database Configuration"
     echo -e "${CYAN}Database password options:${NC}"
     echo "1) Generate secure random password (recommended)"
     echo "2) Enter custom password"
@@ -2781,9 +2803,46 @@ install_wizard() {
     echo -e "${YELLOW}Please save this password!${NC}"
     echo ""
     
-    # Step 5: SSL Certificate
+    # Step 5: Create Docker Compose and start database first
     echo ""
-    echo -e "${PURPLE}[Step 5/6]${NC} SSL Certificate Configuration"
+    echo -e "${PURPLE}[Step 5/7]${NC} Creating Docker Compose and Starting Database"
+    
+    # Create installation directory
+    mkdir -p "$INSTALL_DIR/cert"
+    
+    if [[ "$network_mode" == "host" ]]; then
+        create_compose_host "$panel_port" "$sub_port" "$db_password"
+    else
+        create_compose_bridge "$panel_port" "$sub_port" "$db_password"
+    fi
+    
+    # Start only PostgreSQL first and wait for it to be ready
+    print_info "Starting PostgreSQL database..."
+    cd "$INSTALL_DIR"
+    docker compose up -d postgres
+    
+    # Wait for PostgreSQL to be healthy
+    print_info "Waiting for PostgreSQL to be ready..."
+    local max_attempts=30
+    local attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if docker compose exec -T postgres pg_isready -h 127.0.0.1 -p 5432 -U xui_user -d xui_db &>/dev/null; then
+            print_success "PostgreSQL is ready!"
+            break
+        fi
+        attempt=$((attempt + 1))
+        echo -n "."
+        sleep 2
+    done
+    echo ""
+    
+    if [ $attempt -ge $max_attempts ]; then
+        print_warning "PostgreSQL might not be fully ready, but continuing..."
+    fi
+    
+    # Step 6: SSL Certificate
+    echo ""
+    echo -e "${PURPLE}[Step 6/7]${NC} SSL Certificate Configuration"
     local server_ip=$(get_server_ip)
     echo -e "Your server IPv4: ${GREEN}$server_ip${NC}"
     
@@ -2792,34 +2851,42 @@ install_wizard() {
         echo -e "Your server IPv6: ${GREEN}$detected_ipv6${NC}"
     fi
     
-    # Create installation directory
-    mkdir -p "$INSTALL_DIR/cert"
-    
     # Initialize SSL variables
     SSL_HOST="$server_ip"
     CERT_TYPE="none"
     
-    # Interactive SSL setup
+    # Interactive SSL setup (database is now running, can update settings)
     prompt_and_setup_ssl "$INSTALL_DIR/cert" "$server_ip"
     
     local cert_type="$CERT_TYPE"
     local domain_or_ip="$SSL_HOST"
     
-    # Step 6: Create and start services
-    echo ""
-    echo -e "${PURPLE}[Step 6/6]${NC} Creating and Starting Services"
+    # Save configuration
+    save_config "$panel_port" "$sub_port" "$db_password" "$network_mode" "$cert_type" "$domain_or_ip"
     
+    # Step 7: Start panel
+    echo ""
+    echo -e "${PURPLE}[Step 7/7]${NC} Starting Panel"
+    
+    # Regenerate docker-compose with SSL environment variables now that we have certs
     if [[ "$network_mode" == "host" ]]; then
         create_compose_host "$panel_port" "$sub_port" "$db_password"
     else
         create_compose_bridge "$panel_port" "$sub_port" "$db_password"
     fi
     
-    # Save configuration (no additional ports on initial install)
-    save_config "$panel_port" "$sub_port" "$db_password" "$network_mode" "$cert_type" "$domain_or_ip"
+    # Start the panel
+    print_info "Starting 3X-UI panel..."
+    docker compose up -d 3xui
     
-    # Start services
-    start_services
+    # Wait for panel to start
+    sleep 5
+    
+    if docker compose ps | grep -q "3xui_app.*Up"; then
+        print_success "Panel started successfully!"
+    else
+        print_warning "Panel may still be starting. Check with: docker compose ps"
+    fi
     
     # Final summary
     print_banner
